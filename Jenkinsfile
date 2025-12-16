@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -8,10 +7,9 @@ pipeline {
             choices: ['Agoda', 'Booking', 'Expedia', 'MakeMyTrip', 'Goibibo'],
             description: 'Select product to deploy'
         )
-        choice(
-            name: 'DLL_FILE',
-            choices: ['FastBooking1.dll', 'GoogleHotelFinder2.dll'],
-            description: 'Select DLL to deploy'
+        file(
+            name: 'DLL_UPLOAD',
+            description: 'Upload DLL from your local machine'
         )
     }
 
@@ -20,22 +18,28 @@ pipeline {
     }
 
     stages {
-
-        stage('Checkout Code') {
+        stage('Workspace Debug') {
             steps {
-                git branch: 'main', url: 'https://github.com/yourusername/Bot-Deployment.git'
+                echo "📂 Listing workspace files:"
+                dir("${env.WORKSPACE}") {
+                    bat 'dir'
+                }
             }
         }
 
-        stage('Validate DLL') {
+        stage('Validate DLL Upload') {
             steps {
                 script {
-                    def dllPath = "${env.WORKSPACE}\\DLLs\\${params.DLL_FILE}"
-                    if (!fileExists(dllPath)) {
-                        error "❌ DLL not found in repository: ${dllPath}"
+                    def uploadedFile = "${env.WORKSPACE}\\${params.DLL_UPLOAD}"
+                    if (!fileExists(uploadedFile)) {
+                        error """
+❌ NO DLL UPLOADED
+The file '${params.DLL_UPLOAD}' does not exist in workspace!
+👉 Make sure you upload the DLL using **Build with Parameters**
+"""
                     }
-                    echo "✅ DLL found: ${dllPath}"
-                    env.UPLOADED_DLL = dllPath
+                    echo "✅ DLL uploaded: ${uploadedFile}"
+                    env.UPLOADED_DLL = uploadedFile
                 }
             }
         }
@@ -43,8 +47,8 @@ pipeline {
         stage('Save DLL') {
             steps {
                 script {
-                    def targetDir = "${env.UPLOAD_DIR}"
-                    def targetFile = "${targetDir}\\${params.DLL_FILE}"
+                    def targetDir  = "${env.UPLOAD_DIR}"
+                    def targetFile = "${targetDir}\\${params.DLL_UPLOAD}"
 
                     powershell """
                         if (!(Test-Path '${targetDir}')) {
@@ -59,28 +63,37 @@ pipeline {
 
         stage('Confirm DLL') {
             steps {
-                input message: "Confirm the DLL is correct: ${params.DLL_FILE}", ok: 'Proceed'
+                input message: "Confirm the DLL is correct: ${params.DLL_UPLOAD}", ok: 'Proceed'
             }
         }
 
         stage('Deploy DLL') {
             steps {
                 script {
-                    // Example: Deployment to server
                     def servers = [
-                        Agoda   : [ip:'10.10.10.54', cred:'agoda-creds', dest:'C:\\RankBot\\Agoda']
-                        // Add others...
+                        Agoda   : [ip:'10.10.10.54', cred:'agoda-creds', dest:'C:\\RankBot\\Agoda'],
+                        Booking : [ip:'10.10.10.63', cred:'booking-creds', dest:'C:\\RankBot\\Booking'],
+                        Expedia : [ip:'10.10.10.XX', cred:'expedia-creds', dest:'C:\\RankBot\\Expedia']
+                        // Add other servers...
                     ]
+
                     def cfg = servers[params.PRODUCT]
+                    if (!cfg || cfg.ip.contains('XX')) {
+                        error "❌ Server not configured for ${params.PRODUCT}"
+                    }
 
-                    withCredentials([usernamePassword(credentialsId: cfg.cred,
-                        usernameVariable: 'DEPLOY_USER', passwordVariable: 'DEPLOY_PASS')]) {
-
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: cfg.cred,
+                            usernameVariable: 'DEPLOY_USER',
+                            passwordVariable: 'DEPLOY_PASS'
+                        )
+                    ]) {
                         powershell """
                         \$sec = ConvertTo-SecureString \$env:DEPLOY_PASS -AsPlainText -Force
                         \$cred = New-Object System.Management.Automation.PSCredential(\$env:DEPLOY_USER, \$sec)
                         \$s = New-PSSession -ComputerName ${cfg.ip} -Credential \$cred
-                        Copy-Item '${env.UPLOAD_DIR}\\${params.DLL_FILE}' '${cfg.dest}' -ToSession \$s -Force
+                        Copy-Item '${env.UPLOAD_DIR}\\${params.DLL_UPLOAD}' '${cfg.dest}' -ToSession \$s -Force
                         Remove-PSSession \$s
                         """
                     }
@@ -95,3 +108,4 @@ pipeline {
         always { echo '🧹 Pipeline finished' }
     }
 }
+
